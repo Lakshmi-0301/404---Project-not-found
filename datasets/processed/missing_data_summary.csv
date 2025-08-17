@@ -1,0 +1,61 @@
+Column,Missing_Count,Missing_Percentage
+Country,0,0.0
+Year,0,0.0
+"Life expectancy at birth, female (years)",0,0.0
+"Life expectancy at birth, male (years)",0,0.0
+"Life expectancy at birth, total (years)",0,0.0
+Population growth (annual %),0,0.0
+Poverty headcount ratio at $3.00 a day (2021 PPP) (% of population),0,0.0
+"Unemployment, total (% of total labor force) (modeled ILO estimate)_y",0,0.0
+Urban population (% of total population),0,0.0
+agr_area_harvested_avg,0,0.0
+agr_production_avg,0,0.0
+agr_yield_avg,0,0.0
+agr_area_harvested_item_count,0,0.0
+agr_production_item_count,0,0.0
+agr_yield_item_count,0,0.0
+agr_area_harvested_total,0,0.0
+agr_production_total,0,0.0
+agr_yield_total,0,0.0
+pop_rural_population,0,0.0
+pop_total_population___both_sexes,0,0.0
+pop_total_population___female,0,0.0
+pop_total_population___male,0,0.0
+pop_urban_population,0,0.0
+disaster_count,0,0.0
+disaster_deaths,0,0.0
+disaster_injured,0,0.0
+disaster_affected,0,0.0
+disaster_total_affected,0,0.0
+disaster_damage_usd_thousands,0,0.0
+Gini index,0,0.0
+"Foreign direct investment, net inflows (% of GDP)",0,0.0
+External debt stocks (% of GNI),0,0.0
+"Employment to population ratio, ages 15-24, male (%) (national estimate)",0,0.0
+Exports of goods and services (% of GDP),0,0.0
+GDP (current US$),0,0.0
+GDP growth (annual %),0,0.0
+GDP per capita (current US$),0,0.0
+Imports of goods and services (% of GDP),0,0.0
+"Inflation, consumer prices (annual %)",0,0.0
+Trade (% of GDP),0,0.0
+"Employment to population ratio, 15+, female (%) (modeled ILO estimate)",0,0.0
+"Employment to population ratio, 15+, male (%) (modeled ILO estimate)",0,0.0
+"Employment to population ratio, ages 15-24, female (%) (modeled ILO estimate)",0,0.0
+"Employment to population ratio, ages 15-24, female (%) (national estimate)",0,0.0
+"Employment to population ratio, ages 15-24, male (%) (modeled ILO estimate)",0,0.0
+"Employment to population ratio, ages 15-24, total (%) (modeled ILO estimate)",0,0.0
+Current account balance (% of GDP),0,0.0
+Unemployment with advanced education (% of total labor force with advanced education),0,0.0
+"Unemployment with advanced education, female (% of female labor force with advanced education)",0,0.0
+"Unemployment with advanced education, male (% of male labor force with advanced education)",0,0.0
+Unemployment with basic education (% of total labor force with basic education),0,0.0
+"Unemployment with basic education, female (% of female labor force with basic education)",0,0.0
+"Unemployment with basic education, male (% of male labor force with basic education)",0,0.0
+"Unemployment, female (% of female labor force) (modeled ILO estimate)",0,0.0
+"Unemployment, male (% of male labor force) (modeled ILO estimate)",0,0.0
+"Unemployment, total (% of total labor force) (modeled ILO estimate)_x",0,0.0
+"Unemployment, youth female (% of female labor force ages 15-24) (modeled ILO estimate)",0,0.0
+"Unemployment, youth male (% of male labor force ages 15-24) (modeled ILO estimate)",0,0.0
+"Unemployment, youth total (% of total labor force ages 15-24) (modeled ILO estimate)",0,0.0
+disaster_aid_usd_thousands,0,0.0

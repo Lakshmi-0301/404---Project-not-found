@@ -1,0 +1,7 @@
+ANALYSIS SUMMARY
+==============================
+
+Total Countries: 25
+Years Covered: 2000 - 2024
+Total Disasters: 3422.0
+Most Vulnerable (Trade): Belgium
