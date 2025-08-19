@@ -435,7 +435,7 @@ def load_data(path):
 def main():
     st.title("Policy Scenario Explorer — What-If Simulations for 2030")
 
-    data_file = "datasets/integrated_tren_dataset_with_indexes.csv"
+    data_file = "datasets/processed/integrated_tren_dataset.csv"
     df = load_data(data_file)
     analyzer = PolicyScenarioAnalyzer(df)
 
