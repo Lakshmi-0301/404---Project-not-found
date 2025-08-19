@@ -5,7 +5,7 @@ import numpy as np
 import pandas as pd
 import streamlit as st
 
-DEFAULT_DATA_PATH = "datasets/integrated_tren_dataset_with_indexes.csv"
+DEFAULT_DATA_PATH = "datasets/processed/integrated_tren_dataset.csv"
 DEFAULT_PARTNER_COLUMNS = ["exporter", "partner", "year", "trade_value"]
 
 def load_csv(path: str) -> pd.DataFrame:
