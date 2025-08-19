@@ -81,7 +81,7 @@ The project addresses 13 specific problems, including:
 3. **Run the Application**:
    - Launch the dashboard and analyses:
      ```
-     python app.py
+     streamlit run app.py
      ```
 4. **Visualizations & Models**:
    - Scripts in `src/` handle specific tasks like visualizations, modeling, and simulations.
