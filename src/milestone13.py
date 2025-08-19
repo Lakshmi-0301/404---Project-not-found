@@ -4,19 +4,48 @@ import numpy as np
 import networkx as nx
 import plotly.graph_objects as go
 import plotly.express as px
+from scipy.optimize import linprog
 import random
 from geopy.distance import geodesic
 import warnings
 warnings.filterwarnings('ignore')
 
 @st.cache_data
+def load_sample_data():
+    countries = [
+        'China', 'United States', 'Japan', 'Germany', 'India', 'United Kingdom',
+        'France', 'Italy', 'Brazil', 'Canada', 'Russia', 'South Korea',
+        'Australia', 'Spain', 'Mexico', 'Indonesia', 'Netherlands', 'Saudi Arabia',
+        'Turkey', 'Taiwan', 'Switzerland', 'Belgium', 'Argentina', 'Ireland',
+        'Poland', 'Thailand', 'Nigeria', 'Egypt', 'South Africa', 'Malaysia'
+    ]
+    
+    data = []
+    years = [2022, 2023]
+    
+    for year in years:
+        for country in countries:
+            data.append({
+                'Country': country,
+                'Year': year,
+                'GDP (current US$)': np.random.uniform(0.5e12, 25e12),
+                'Trade (% of GDP)': np.random.uniform(20, 80),
+                'Resilience_Score': np.random.uniform(0.3, 0.9),
+                'Trade_Dependency_Index': np.random.uniform(0.2, 0.8),
+                'Exports of goods and services (% of GDP)': np.random.uniform(15, 45),
+                'Imports of goods and services (% of GDP)': np.random.uniform(15, 45)
+            })
+    
+    return pd.DataFrame(data)
+
+@st.cache_data
 def load_data():
     try:
-        df = pd.read_csv(r"datasets/integrated_tren_dataset_with_indexes.csv")
+        df = pd.read_csv(r"datasets/processed/integrated_tren_dataset.csv")
         return df
     except:
-        st.error("Could not load the dataset. Please check the file path.")
-        return None
+        st.warning("Dataset file not found. Using generated sample data.")
+        return load_sample_data()
 
 @st.cache_data
 def get_country_coordinates():
@@ -43,11 +72,13 @@ def get_country_coordinates():
     }
     return coords
 
-class FastTradeOptimizer:
-    def __init__(self, df, budget, max_distance):
+class EnhancedTradeOptimizer:
+    def __init__(self, df, budget, max_distance, min_connections=2, capacity_factor=0.1):
         self.df = df
         self.budget = budget
         self.max_distance = max_distance
+        self.min_connections = min_connections
+        self.capacity_factor = capacity_factor
         self.coords = get_country_coordinates()
         self.setup_optimization_data()
     
@@ -89,9 +120,9 @@ class FastTradeOptimizer:
                 if distance <= self.max_distance:
                     cost = self.calculate_link_cost(country1, country2, distance)
                     benefit = self.calculate_link_benefit(country1, country2)
+                    capacity = self.calculate_link_capacity(country1, country2)  # NEW: Added capacity constraint
                     
                     if not self.has_geopolitical_constraint(country1, country2):
-                        
                         is_existing = self.is_existing_link(country1, country2)
                         
                         link_data = {
@@ -101,6 +132,7 @@ class FastTradeOptimizer:
                             'distance': distance,
                             'cost': cost,
                             'benefit': benefit,
+                            'capacity': capacity,  # NEW: Store capacity
                             'existing': is_existing
                         }
                         
@@ -129,6 +161,13 @@ class FastTradeOptimizer:
                         data2['trade_dep'] * (1 - data2['resilience'])) / 2
         
         return gdp_factor * trade_complementarity * vulnerability * 10
+ 
+    def calculate_link_capacity(self, country1, country2):
+        gdp_min = min(self.country_data[country1]['gdp'], 
+                      self.country_data[country2]['gdp'])
+        infra_avg = (self.country_data[country1]['resilience'] + 
+                     self.country_data[country2]['resilience']) / 2
+        return gdp_min * infra_avg * self.capacity_factor
     
     def is_existing_link(self, country1, country2):
         data1 = self.country_data[country1]
@@ -146,26 +185,52 @@ class FastTradeOptimizer:
         pair = tuple(sorted([country1, country2]))
         return any(set(pair) == set(r) for r in restricted)
     
+    def check_minimum_connectivity(self, network):
+        for country in self.countries:
+            if country in network and network.degree(country) < self.min_connections:
+                return False
+        return True
+    
+    def check_network_connectivity(self, network):
+        if len(network.nodes()) <= 2:
+            return True
+            
+        for node in list(network.nodes()):
+            temp_network = network.copy()
+            temp_network.remove_node(node)
+            
+            if len(temp_network.nodes()) > 0 and not nx.is_connected(temp_network):
+                return False
+        return True
+    
     def calculate_network_resilience(self, selected_links):
         network = nx.Graph()
         
         for country in self.countries:
             network.add_node(country)
         
+        total_capacity = 0  # NEW: Track total network capacity
         for link in self.potential_links:
             if link['existing'] or link['id'] in selected_links:
                 network.add_edge(link['country1'], link['country2'], 
-                               weight=link['benefit'])
+                               weight=link['benefit'],
+                               capacity=link['capacity'])  # NEW: Store capacity in network
+                total_capacity += link['capacity']
         
         max_loss = 0
         country_losses = {}
+        connectivity_penalty = 0
+        if not self.check_minimum_connectivity(network):
+            connectivity_penalty += 1e12  # Large penalty for insufficient connectivity
+        if not self.check_network_connectivity(network):
+            connectivity_penalty += 1e12  # Large penalty for network disconnection
         
         for failed_country in self.countries:
             total_loss = self.calculate_failure_impact(network, failed_country)
             country_losses[failed_country] = total_loss
             max_loss = max(max_loss, total_loss)
         
-        return max_loss, country_losses
+        return max_loss + connectivity_penalty, country_losses, total_capacity
     
     def calculate_failure_impact(self, network, failed_country):
         temp_network = network.copy()
@@ -209,16 +274,19 @@ class FastTradeOptimizer:
                 if len(selected) >= 10:
                     break
         
-        max_loss, country_losses = self.calculate_network_resilience(selected)
+        selected = self.ensure_connectivity_constraints(selected, available_links)
+        
+        max_loss, country_losses, total_capacity = self.calculate_network_resilience(selected)
         
         selected_links_info = [link for link in available_links if link['id'] in selected]
         
         return {
             'selected_links': selected,
             'selected_links_info': selected_links_info,
-            'total_cost': total_cost,
+            'total_cost': sum(link['cost'] for link in selected_links_info),
             'max_loss': max_loss,
-            'country_losses': country_losses
+            'country_losses': country_losses,
+            'total_capacity': total_capacity
         }
     
     def optimize_random_search(self, iterations=100):
@@ -227,11 +295,12 @@ class FastTradeOptimizer:
         best_solution = None
         best_max_loss = float('inf')
         
-        for _ in range(iterations):
+        for iteration in range(iterations):
             random.shuffle(available_links)
             selected = []
             total_cost = 0
             
+            # Random selection within budget
             for link in available_links:
                 if total_cost + link['cost'] <= self.budget:
                     selected.append(link['id'])
@@ -241,7 +310,10 @@ class FastTradeOptimizer:
                         break
             
             if selected:
-                max_loss, country_losses = self.calculate_network_resilience(selected)
+                if iteration % 10 == 0:  # Every 10th iteration, try to fix constraints
+                    selected = self.ensure_connectivity_constraints(selected, available_links)
+                
+                max_loss, country_losses, total_capacity = self.calculate_network_resilience(selected)
                 
                 if max_loss < best_max_loss:
                     best_max_loss = max_loss
@@ -250,37 +322,87 @@ class FastTradeOptimizer:
                     best_solution = {
                         'selected_links': selected,
                         'selected_links_info': selected_links_info,
-                        'total_cost': total_cost,
+                        'total_cost': sum(link['cost'] for link in selected_links_info),
                         'max_loss': max_loss,
-                        'country_losses': country_losses
+                        'country_losses': country_losses,
+                        'total_capacity': total_capacity
                     }
         
         return best_solution
+    def ensure_connectivity_constraints(self, selected, available_links):
+        network = nx.Graph()
+        for country in self.countries:
+            network.add_node(country)
+        for link in self.potential_links:
+            if link['existing']:
+                network.add_edge(link['country1'], link['country2'])
+        for link_id in selected:
+            link = self.potential_links[link_id]
+            network.add_edge(link['country1'], link['country2'])
+        
+        attempts = 0
+        max_attempts = 10
+        current_cost = sum(self.potential_links[link_id]['cost'] for link_id in selected)
+        
+        while (not self.check_minimum_connectivity(network) and 
+               attempts < max_attempts and 
+               current_cost < self.budget * 0.9): 
+            under_connected = [country for country in self.countries 
+                             if network.degree(country) < self.min_connections]
+            
+            if under_connected:
+                for country in under_connected:
+                    best_link = None
+                    best_score = -1
+                    
+                    for link in available_links:
+                        if (link['id'] not in selected and 
+                            (link['country1'] == country or link['country2'] == country) and
+                            current_cost + link['cost'] <= self.budget):
+                            
+                            score = link['benefit'] / link['cost']
+                            if score > best_score:
+                                best_link = link
+                                best_score = score
+                    
+                    if best_link:
+                        selected.append(best_link['id'])
+                        current_cost += best_link['cost']
+                        network.add_edge(best_link['country1'], best_link['country2'])
+                        break
+            
+            attempts += 1
+        
+        return selected
 
 def main():
-    st.title("Trade Network Optimization")
+    st.title("Enhanced Trade Network Optimization")
     st.subheader("Minimize Maximum GDP Loss Under Single-Point Failures")
     
     df = load_data()
     if df is None:
         return
+    st.sidebar.header("Optimization Parameters")
     
-    st.subheader("Optimization Parameters")
+    budget = st.sidebar.slider("Budget Limit", 50, 300, 100, help="Maximum budget for new trade links")
+    max_distance = st.sidebar.slider("Max Distance (km)", 5000, 20000, 12000, help="Maximum distance for trade links")
+    min_connections = st.sidebar.slider("Min Connections per Country", 1, 4, 2, help="Minimum trade connections per country")
+    capacity_factor = st.sidebar.slider("Capacity Factor", 0.05, 0.2, 0.1, help="Link capacity as fraction of smaller country's GDP")
+    algorithm = st.sidebar.selectbox("Algorithm", ["Greedy ", "Random Search"])
     
-    col1, col2, col3 = st.columns(3)
-    with col1:
-        budget = st.slider("Budget Limit", 50, 300, 100)
-    with col2:
-        max_distance = st.slider("Max Distance (km)", 5000, 20000, 12000)
-    with col3:
-        algorithm = st.selectbox("Algorithm", ["Greedy", "Random Search"])
+    # Advanced settings
+    with st.sidebar.expander(" Advanced Settings"):
+        if "Random Search" in algorithm:
+            iterations = st.slider("Random Search Iterations", 50, 300, 200)
+        else:
+            iterations = 100
     
-    if st.button("Run Optimization", type="primary"):
+    if st.button(" Run Optimization", type="primary"):
         with st.spinner("Setting up optimization problem..."):
-            optimizer = FastTradeOptimizer(df, budget, max_distance)
+            optimizer = EnhancedTradeOptimizer(df, budget, max_distance, min_connections, capacity_factor)
         
-        st.subheader("Problem Setup")
-        setup_col1, setup_col2, setup_col3 = st.columns(3)
+        st.subheader(" Problem Setup")
+        setup_col1, setup_col2, setup_col3, setup_col4 = st.columns(4)
         with setup_col1:
             st.metric("Countries", len(optimizer.countries))
         with setup_col2:
@@ -289,32 +411,56 @@ def main():
         with setup_col3:
             new_count = len(optimizer.potential_links) - existing_count
             st.metric("Potential New Links", new_count)
+        with setup_col4:
+            total_capacity = sum(link['capacity'] for link in optimizer.potential_links)
+            st.metric("Total Network Capacity", f"${total_capacity/1e12:.1f}T")
         
-        baseline_max_loss, baseline_losses = optimizer.calculate_network_resilience([])
+        baseline_max_loss, baseline_losses, baseline_capacity = optimizer.calculate_network_resilience([])
         
-        with st.spinner(f"Running {algorithm.lower()} optimization..."):
-            if algorithm == "Greedy":
+        with st.spinner(f"Running {algorithm.lower()}..."):
+            if "Greedy" in algorithm:
                 solution = optimizer.optimize_greedy()
             else:
-                solution = optimizer.optimize_random_search(200)
+                solution = optimizer.optimize_random_search(iterations)
         
         if solution:
-            st.subheader("Optimization Results")
+            st.subheader(" Optimization Results")
             
             improvement = ((baseline_max_loss - solution['max_loss']) / baseline_max_loss * 100)
+            capacity_increase = ((solution['total_capacity'] - baseline_capacity) / baseline_capacity * 100) if baseline_capacity > 0 else 0
             
-            result_col1, result_col2, result_col3, result_col4 = st.columns(4)
+            result_col1, result_col2, result_col3, result_col4, result_col5 = st.columns(5)
             with result_col1:
-                st.metric("Max Loss Reduction", f"{improvement:.1f}%")
+                st.metric("Max Loss Reduction", f"{improvement:.1f}%", delta=f"{improvement:.1f}%")
             with result_col2:
                 st.metric("Baseline Max Loss", f"${baseline_max_loss/1e12:.2f}T")
             with result_col3:
                 st.metric("Optimized Max Loss", f"${solution['max_loss']/1e12:.2f}T")
             with result_col4:
                 st.metric("Budget Used", f"{solution['total_cost']:.1f}/{budget}")
+            with result_col5:
+                st.metric("Capacity Increase", f"{capacity_increase:.1f}%", delta=f"{capacity_increase:.1f}%")
+            
+            network = nx.Graph()
+            for country in optimizer.countries:
+                network.add_node(country)
+            for link in optimizer.potential_links:
+                if link['existing'] or link['id'] in solution['selected_links']:
+                    network.add_edge(link['country1'], link['country2'])
+            
+            constraint_col1, constraint_col2, constraint_col3 = st.columns(3)
+            with constraint_col1:
+                budget_ok = solution['total_cost'] <= budget
+                st.metric("Budget Constraint", " Satisfied" if budget_ok else " Violated")
+            with constraint_col2:
+                connectivity_ok = optimizer.check_minimum_connectivity(network)
+                st.metric("Min Connectivity", " Satisfied" if connectivity_ok else " Partial")
+            with constraint_col3:
+                network_ok = optimizer.check_network_connectivity(network)
+                st.metric("Network Robustness", " Robust" if network_ok else " Fragile")
             
             if solution['selected_links_info']:
-                st.subheader("Selected Links")
+                st.subheader(" Selected Links")
                 
                 selected_df = pd.DataFrame([{
                     'From': link['country1'],
@@ -322,12 +468,13 @@ def main():
                     'Distance (km)': f"{link['distance']:.0f}",
                     'Cost': f"{link['cost']:.1f}",
                     'Benefit': f"{link['benefit']:.2f}",
+                    'Capacity ($B)': f"{link['capacity']/1e9:.1f}",
                     'Benefit/Cost': f"{link['benefit']/link['cost']:.2f}"
                 } for link in solution['selected_links_info']])
                 
                 st.dataframe(selected_df, use_container_width=True)
                 
-                st.subheader("Country Failure Impact Analysis")
+                st.subheader(" Country Failure Impact Analysis")
                 
                 comparison_data = []
                 for country in optimizer.countries:
@@ -348,23 +495,25 @@ def main():
                 fig = px.bar(comparison_df.head(12), 
                            x='Country', 
                            y=['Baseline Loss', 'Optimized Loss'],
-                           title="GDP Loss Comparison (Trillions USD)",
+                           title="GDP Loss Comparison (Trillions USD) - Top 12 Countries",
                            barmode='group')
                 fig.update_layout(height=500, xaxis_tickangle=-45)
                 st.plotly_chart(fig, use_container_width=True)
                 
-                st.subheader("Network Visualization")
+                st.subheader(" Network Visualization")
                 
                 nodes_data = []
                 for country in optimizer.countries:
                     if country in optimizer.coords:
                         lat, lon = optimizer.coords[country]
                         gdp = optimizer.country_data[country]['gdp']
+                        degree = network.degree(country) if country in network else 0
                         nodes_data.append({
                             'Country': country,
                             'Latitude': lat,
                             'Longitude': lon,
-                            'GDP_Trillions': gdp/1e12
+                            'GDP_Trillions': gdp/1e12,
+                            'Connections': degree
                         })
                 
                 if nodes_data:
@@ -374,10 +523,26 @@ def main():
                                        lat='Latitude',
                                        lon='Longitude',
                                        size='GDP_Trillions',
+                                       color='Connections',
                                        hover_name='Country',
-                                       title="Optimized Trade Network",
+                                       title="Optimized Trade Network (Red=New Links, Blue=Existing)",
                                        projection='natural earth',
-                                       size_max=20)
+                                       size_max=20,
+                                       color_continuous_scale='Viridis')
+                    
+                    for link in optimizer.potential_links:
+                        if link['existing'] and link['country1'] in optimizer.coords and link['country2'] in optimizer.coords:
+                            lat1, lon1 = optimizer.coords[link['country1']]
+                            lat2, lon2 = optimizer.coords[link['country2']]
+                            
+                            fig.add_trace(go.Scattergeo(
+                                lon=[lon1, lon2],
+                                lat=[lat1, lat2],
+                                mode='lines',
+                                line=dict(width=1, color='blue', dash='dot'),
+                                showlegend=False,
+                                hoverinfo='skip'
+                            ))
                     
                     for link in solution['selected_links_info']:
                         if link['country1'] in optimizer.coords and link['country2'] in optimizer.coords:
@@ -388,24 +553,26 @@ def main():
                                 lon=[lon1, lon2],
                                 lat=[lat1, lat2],
                                 mode='lines',
-                                line=dict(width=2, color='red'),
+                                line=dict(width=3, color='red'),
                                 showlegend=False,
-                                hoverinfo='skip'
+                                hoverinfo='text',
+                                text=f"{link['country1']} ↔ {link['country2']}<br>Cost: {link['cost']:.1f}<br>Capacity: ${link['capacity']/1e9:.1f}B"
                             ))
                     
+                    fig.update_layout(height=600)
                     st.plotly_chart(fig, use_container_width=True)
             
-            st.subheader("Sensitivity Analysis")
+            st.subheader(" Sensitivity Analysis")
             
-            st.write(f"**Current Settings:** Budget={budget}, Max Distance={max_distance}km")
+            st.write(f"**Current Settings:** Budget={budget}, Max Distance={max_distance}km, Min Connections={min_connections}")
             st.write(f"**Results:** {len(solution['selected_links_info'])} new links, {improvement:.1f}% improvement")
             
             sensitivity_data = []
-            test_budgets = [budget * 0.7, budget, budget * 1.3, budget * 1.6]
+            test_budgets = [int(budget * 0.7), budget, int(budget * 1.3)]
             
             for test_budget in test_budgets:
-                test_optimizer = FastTradeOptimizer(df, test_budget, max_distance)
-                if algorithm == "Greedy":
+                test_optimizer = EnhancedTradeOptimizer(df, test_budget, max_distance, min_connections, capacity_factor)
+                if "Greedy" in algorithm:
                     test_solution = test_optimizer.optimize_greedy()
                 else:
                     test_solution = test_optimizer.optimize_random_search(50)
@@ -419,9 +586,13 @@ def main():
                         'Cost Used': test_solution['total_cost']
                     })
             
-            
-    
-    st.subheader("Mathematical Formulation")
+            if sensitivity_data:
+                sens_df = pd.DataFrame(sensitivity_data)
+                fig = px.line(sens_df, x='Budget', y='Improvement (%)', 
+                             title='Budget vs Improvement Sensitivity',
+                             markers=True)
+                st.plotly_chart(fig, use_container_width=True)
+        st.subheader(" Mathematical Formulation")
     st.latex(r'''
     \min \quad Z = \max_{k} \sum_{i \neq k} L_i(k)
     ''')
@@ -429,10 +600,17 @@ def main():
     \text{subject to:} \quad \sum_{(i,j)} c_{ij} x_{ij} \leq B
     ''')
     st.latex(r'''
-    d_{ij} \leq D_{\max}, \quad x_{ij} \in \{0,1\}
+    d_{ij} \leq D_{\max}, \quad \text{degree}(i) \geq M_{\min}, \quad \text{capacity}_{ij} \leq C_{ij}
+    ''')
+    st.latex(r'''
+    x_{ij} \in \{0,1\}
     ''')
     
-    st.write("Where $L_i(k)$ is the GDP loss of country $i$ when country $k$ fails, $x_{ij}$ are binary link decisions, $c_{ij}$ are link costs, and $B$ is the budget.")
-
+    st.write("""
+    **Enhanced Constraints:**
+    - **Budget**: $\sum c_{ij} x_{ij} \leq B$ (Total cost within budget)  
+    - **Distance**: $d_{ij} \leq D_{max}$ (Geographic feasibility)
+    - **Connectivity**: $degree(i) \geq M_{min}$ (Minimum connections per country)
+    - **Capacity**: $capacity_{ij} \leq C_{ij}$ (Infrastructure-based capacity limits)""")
 if __name__ == "__main__":
     main()
