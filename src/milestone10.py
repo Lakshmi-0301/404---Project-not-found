@@ -7,7 +7,9 @@ from sklearn.preprocessing import StandardScaler
 from sklearn.metrics import mean_absolute_error, r2_score
 import plotly.express as px
 import plotly.graph_objects as go
+from plotly.subplots import make_subplots
 import warnings
+import uuid
 
 warnings.filterwarnings('ignore')
 
@@ -257,7 +259,7 @@ def main():
             fig1 = px.bar(gdp_data.head(15), 
                         x='Country', 
                         y=['Baseline', 'Disaster (2026)', 'Trade War (2027)', 'Combined Shocks'],
-                        title="GDP Predictions when a disaster hits in 2026",
+                        title="GDP Predictions by Scenario (Top 15 Countries)",
                         barmode='group')
             fig1.update_layout(height=600, xaxis_tickangle=-45)
             st.plotly_chart(fig1, use_container_width=True, key="gdp_predictions_main")
@@ -266,7 +268,7 @@ def main():
             impact_fig1 = px.bar(gdp_data.head(15),
                               x='Country',
                               y=['Disaster Impact', 'Trade War Impact', 'Combined Impact'],
-                              title="GDP Impact when a Trade War hits in 2027",
+                              title="GDP Impact by Scenario (%)",
                               barmode='group')
             impact_fig1.update_layout(height=500, xaxis_tickangle=-45)
             st.plotly_chart(impact_fig1, use_container_width=True, key="gdp_impact_main")
@@ -280,7 +282,7 @@ def main():
             fig2 = px.bar(poverty_data, 
                         x='Country', 
                         y=['Baseline', 'Disaster (2026)', 'Trade War (2027)', 'Combined Shocks'],
-                        title="Poverty Rate Predictions when a disaster hits in 2026",
+                        title="Poverty Rate Predictions by Scenario",
                         barmode='group')
             fig2.update_layout(height=600, xaxis_tickangle=-45)
             st.plotly_chart(fig2, use_container_width=True, key="poverty_predictions_main")
@@ -298,7 +300,7 @@ def main():
             fig3 = px.bar(unemployment_data, 
                         x='Country', 
                         y=['Baseline', 'Disaster (2026)', 'Trade War (2027)', 'Combined Shocks'],
-                        title="Unemployment Rate Predictions when a trade war hits in 2027",
+                        title="Unemployment Rate Predictions by Scenario",
                         barmode='group')
             fig3.update_layout(height=600, xaxis_tickangle=-45)
             st.plotly_chart(fig3, use_container_width=True, key="unemployment_predictions_main")
@@ -316,6 +318,7 @@ def main():
         if selected_country and selected_country in predictions:
             country_pred = predictions[selected_country]
             
+            st.subheader(f"Economic Impact Summary - {selected_country}")
             metrics_data = []
             
             for metric in ['gdp', 'poverty', 'unemployment']:
@@ -325,11 +328,17 @@ def main():
                     
                     if metric == 'gdp':
                         change = ((combined - baseline) / baseline * 100) if baseline != 0 else 0
-                        metrics_data.append(['GDP (Trillion USD)', f"${baseline/1e12:.2f}T", f"${combined/1e12:.2f}T", f"{change:.1f}%"])
+                        baseline_display = f"${baseline/1e12:.3f}T"
+                        combined_display = f"${combined/1e12:.3f}T"
+                        if abs(change) < 0.1:
+                            change_display = f"{change:.2f}%"
+                        else:
+                            change_display = f"{change:.1f}%"
+                        metrics_data.append(['GDP (Trillion USD)', baseline_display, combined_display, change_display])
                     elif metric == 'poverty':
                         change = ((combined - baseline) / baseline * 100) if baseline != 0 else 0
                         metrics_data.append(['Poverty Rate (%)', f"{baseline:.1f}%", f"{combined:.1f}%", f"{change:+.1f}%"])
-                    else:  
+                    else:
                         change = ((combined - baseline) / baseline * 100) if baseline != 0 else 0
                         metrics_data.append(['Unemployment Rate (%)', f"{baseline:.1f}%", f"{combined:.1f}%", f"{change:+.1f}%"])
             
@@ -338,28 +347,61 @@ def main():
             
             scenarios = ['Baseline', 'Disaster Only', 'Trade War Only', 'Combined Shocks']
             
-            for i, metric in enumerate(['gdp', 'poverty', 'unemployment']):
+            fig = make_subplots(
+                rows=2, cols=2,
+                subplot_titles=('GDP (USD)', 'Poverty Rate (%)', 'Unemployment Rate (%)', 'Impact Summary (%)'),
+                specs=[[{"secondary_y": False}, {"secondary_y": False}],
+                       [{"secondary_y": False}, {"secondary_y": False}]]
+            )
+            
+            if 'gdp' in country_pred['baseline']:
+                gdp_values = [
+                    country_pred['baseline']['gdp'],
+                    country_pred['disaster']['gdp'],
+                    country_pred['trade_war']['gdp'],
+                    country_pred['combined']['gdp']
+                ]
+                fig.add_trace(go.Bar(x=scenarios, y=gdp_values, name='GDP', width=0.4), row=1, col=1)
+            
+            if 'poverty' in country_pred['baseline']:
+                poverty_values = [
+                    country_pred['baseline']['poverty'],
+                    country_pred['disaster']['poverty'],
+                    country_pred['trade_war']['poverty'],
+                    country_pred['combined']['poverty']
+                ]
+                fig.add_trace(go.Bar(x=scenarios, y=poverty_values, name='Poverty', width=0.4), row=1, col=2)
+            
+            if 'unemployment' in country_pred['baseline']:
+                unemployment_values = [
+                    country_pred['baseline']['unemployment'],
+                    country_pred['disaster']['unemployment'],
+                    country_pred['trade_war']['unemployment'],
+                    country_pred['combined']['unemployment']
+                ]
+                fig.add_trace(go.Bar(x=scenarios, y=unemployment_values, name='Unemployment', width=0.4), row=2, col=1)
+            
+            impact_metrics = []
+            impact_values = []
+            for metric in ['gdp', 'poverty', 'unemployment']:
                 if metric in country_pred['baseline']:
-                    values = [
-                        country_pred['baseline'][metric],
-                        country_pred['disaster'][metric],
-                        country_pred['trade_war'][metric],
-                        country_pred['combined'][metric]
-                    ]
-                    
-                    country_fig = go.Figure()
-                    country_fig.add_trace(go.Bar(x=scenarios, y=values, name=metric.upper()))
-                    
-                    if metric == 'gdp':
-                        title = f"{selected_country} - GDP Predictions (USD)"
-                        country_fig.update_layout(yaxis=dict(tickformat='$.2s'))
-                    elif metric == 'poverty':
-                        title = f"{selected_country} - Poverty Rate Predictions (%)"
-                    else:
-                        title = f"{selected_country} - Unemployment Rate Predictions (%)"
-                    
-                    country_fig.update_layout(title=title, height=400)
-                    st.plotly_chart(country_fig, use_container_width=True, key=f"country_{metric}_{selected_country.replace(' ', '_').replace('(', '').replace(')', '').replace(',', '')}")
+                    baseline = country_pred['baseline'][metric]
+                    combined = country_pred['combined'][metric]
+                    if baseline != 0:
+                        impact = ((combined - baseline) / baseline * 100)
+                        impact_metrics.append(metric.upper())
+                        impact_values.append(impact)
+            
+            fig.add_trace(go.Bar(
+                x=impact_metrics, 
+                y=impact_values, 
+                name='Combined Impact',
+                marker_color=['red' if x < 0 else 'green' for x in impact_values],
+                width=0.4
+            ), row=2, col=2)
+            
+            fig.update_layout(height=700, showlegend=False, title_text=f"{selected_country} - Economic Dashboard")
+            st.plotly_chart(fig, use_container_width=True)
     
     st.subheader("Key Findings")
     
@@ -408,11 +450,11 @@ def main():
                 st.metric("Average Unemployment Change", f"{avg_unemployment_impact:+.1f}%")
     
     with st.expander("Methodology"):
-        st.write("**Disaster Shock (2026):** Reduces GDP growth by 15%, trade by 12%, FDI by 25%, and resilience score by 20%")
-        st.write("**Trade War Shock (2027):** Reduces global trade by 20%, exports/imports by 16%, and GDP growth by 10%")
-        st.write("**Models:** Gradient Boosting for GDP, Random Forest for poverty and unemployment")
-        st.write("**Features:** 18 economic indicators including trade dependency, resilience scores, and shock impact measures")
-        st.write("**Changes are shown as percentage changes rather than percentage points**")
+        st.write("Disaster Shock (2026): Reduces GDP growth by 15%, trade by 12%, FDI by 25%, and resilience score by 20%")
+        st.write("Trade War Shock (2027): Reduces global trade by 20%, exports/imports by 16%, and GDP growth by 10%")
+        st.write("Models: Gradient Boosting for GDP, Random Forest for poverty and unemployment")
+        st.write("Features: 18 economic indicators including trade dependency, resilience scores, and shock impact measures")
+        st.write("Changes are shown as percentage changes rather than percentage points")
 
 if __name__ == "__main__":
     main()
