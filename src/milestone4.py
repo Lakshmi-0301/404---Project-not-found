@@ -1,425 +1,328 @@
-import streamlit as st
+import os
+import sys
+from typing import List, Tuple, Optional
 import pandas as pd
 import numpy as np
-from pathlib import Path
-from typing import Dict, List, Optional
-import altair as alt
+import streamlit as st
 
-DEFAULT_DATA_PATH = Path("datasets/processed/integrated_tren_dataset.csv")
-
-AGRI_COLUMNS = {
-    "country": ["Country"],
-    "year": ["Year", "year"],
-    "imports_gdp": [
-        "Imports of goods and services (% of GDP)",
-        "imports_gdp_pct",
-        "Imports_GDP_pct"
-    ],
-    "agr_production_total": ["agr_production_total"],
-    "agr_area_harvested_total": ["agr_area_harvested_total"],
-    "pop_total_population": ["pop_total_population___both_sexes"],
-    "gdp_current": ["GDP (current US$)"],
-    "food_inflation": ["Inflation, consumer prices (annual %)"],
-}
-
-@st.cache_data(show_spinner=False)
-def load_agri_data() -> pd.DataFrame:
+def _safe_lower(s):
     try:
-        if DEFAULT_DATA_PATH.exists():
-            df = pd.read_csv(DEFAULT_DATA_PATH)
-        else:
-            st.error(f"Dataset not found at {DEFAULT_DATA_PATH}. Please provide the correct dataset.")
-            return pd.DataFrame()
-        
-        df = df.drop_duplicates()
-        
-        if 'Country' in df.columns:
-            df['Country'] = df['Country'].astype(str)
-        if 'Year' in df.columns or 'year' in df.columns:
-            year_col = 'Year' if 'Year' in df.columns else 'year'
-            df[year_col] = pd.to_numeric(df[year_col], errors='coerce')
-        
-        return df
-    except Exception as e:
-        st.error(f"Error loading data: {e}")
-        return pd.DataFrame()
+        return str(s).lower()
+    except Exception:
+        return s
 
-def resolve_agri_columns(df: pd.DataFrame) -> Dict[str, Optional[str]]:
-    mapping = {}
-    for key, candidates in AGRI_COLUMNS.items():
-        found = None
-        for candidate in candidates:
-            if candidate in df.columns:
-                found = candidate
-                break
-        mapping[key] = found
-    return mapping
+def detect_columns(df: pd.DataFrame):
+    cols = {c: _safe_lower(c) for c in df.columns}
+    inv = {v: k for k, v in cols.items()}
+    def pick(candidates: List[str]) -> Optional[str]:
+        for cand in candidates:
+            if cand in inv:
+                return inv[cand]
+        for k, v in cols.items():
+            for cand in candidates:
+                if cand in v:
+                    return k
+        return None
 
-def compute_food_security_index(df: pd.DataFrame, column_mapping: Dict[str, Optional[str]], 
-                              latest_year_only: bool = True) -> pd.DataFrame:
-    country_col = column_mapping['country']
-    year_col = column_mapping['year']
-    
-    if not country_col or not year_col:
-        st.error("Country or Year columns not found in data")
-        return pd.DataFrame()
-    
-    if latest_year_only:
-        df_latest = df.groupby(country_col)[year_col].transform('max')
-        df_work = df[df[year_col] == df_latest].copy()
-    else:
-        df_work = df.copy()
-    
-    results = []
-    
-    for country in df_work[country_col].unique():
-        if pd.isna(country) or country == 'nan':
-            continue
-            
-        country_data = df_work[df_work[country_col] == country].iloc[0]
-        
-        import_intensity = 0
-        if column_mapping['imports_gdp'] and not pd.isna(country_data.get(column_mapping['imports_gdp'])):
-            import_intensity = float(country_data[column_mapping['imports_gdp']])
-        
-        agri_production = 0
-        if column_mapping['agr_production_total'] and not pd.isna(country_data.get(column_mapping['agr_production_total'])):
-            agri_production = float(country_data[column_mapping['agr_production_total']])
-        
-        population = 0
-        if column_mapping['pop_total_population'] and not pd.isna(country_data.get(column_mapping['pop_total_population'])):
-            population = float(country_data[column_mapping['pop_total_population']])
-        
-        food_inflation = 0
-        if column_mapping['food_inflation'] and not pd.isna(country_data.get(column_mapping['food_inflation'])):
-            food_inflation = float(country_data[column_mapping['food_inflation']])
-        
- 
-        top_partner = "Unknown"
-        top_partner_share = 0
-        partner_concentration = 0
-        
-        if import_intensity > 50:
-            top_partner_share = 0.35 
-            partner_concentration = 0.20
-        elif import_intensity > 30:
-            top_partner_share = 0.30
-            partner_concentration = 0.15
-        else:
-            top_partner_share = 0.25
-            partner_concentration = 0.10
-        
-        import_component = min(import_intensity / 2, 40)
-        concentration_component = partner_concentration * 100
-        production_component = max(0, (1000000 - agri_production) / 20000)
-        inflation_component = max(0, food_inflation * 2)
-        
-        fsi = (0.35 * import_component +
-               0.35 * concentration_component +
-               0.20 * production_component +
-               0.10 * inflation_component)
-        
-        results.append({
-            'Country': country,
-            'Import_Intensity_GDP': import_intensity,
-            'Top_Partner_Share': top_partner_share,
-            'Partner_Concentration_HHI': partner_concentration,
-            'Agri_Production': agri_production,
-            'Population': population,
-            'Food_Inflation': food_inflation,
-            'Food_Security_Index': fsi,
-            'Risk_Category': 'High' if fsi > 35 else 'Medium' if fsi > 25 else 'Low'
-        })
-    
-    return pd.DataFrame(results).sort_values('Food_Security_Index', ascending=False)
+    country_col = pick(["country", "reporter", "importer", "economy", "country_name"])
+    partner_col = pick(["partner", "exporter", "supplier", "source", "trade_partner"])
+    product_col = pick(["product", "commodity", "item", "hs_desc", "category", "sector"])
+    value_col   = pick(["value", "import_value", "imports", "val_usd", "trade_value", "usd", "amount"])
+    year_col    = pick(["year", "time", "period"])
+    hs_col      = pick(["hs", "hs_code", "hs6", "hs4", "hs_chapter", "hschapter", "chapter"])
 
-def simulate_food_security_shock(df: pd.DataFrame, fsi_df: pd.DataFrame, 
-                               column_mapping: Dict[str, Optional[str]], 
-                               shock_countries: List[str], shock_magnitude: float = 0.5) -> pd.DataFrame:
-    results = []
-    
-    for country in shock_countries:
-        if country not in fsi_df['Country'].values:
-            continue
-            
-        country_info = fsi_df[fsi_df['Country'] == country].iloc[0]
-        
-        import_intensity = country_info['Import_Intensity_GDP']
-        top_partner_share = country_info['Top_Partner_Share']
-        population = country_info['Population']
-        
-        import_loss_pct = top_partner_share * shock_magnitude
-        food_price_increase = import_loss_pct * import_intensity / 100 * 10
-        
-        if import_intensity > 50:
-            multiplier = 2.0
-        elif import_intensity > 30:
-            multiplier = 1.5
-        else:
-            multiplier = 1.2
-            
-        total_price_impact = food_price_increase * multiplier
-        
-        baseline_inflation = 2.0
-        if column_mapping['food_inflation']:
-            country_data = df[df[column_mapping['country']] == country]
-            if not country_data.empty:
-                latest_inflation = country_data[column_mapping['food_inflation']].dropna()
-                if not latest_inflation.empty:
-                    baseline_inflation = float(latest_inflation.iloc[-1])
-        
-        shocked_inflation = baseline_inflation + total_price_impact
-        
-        recovery_years = max(1, min(5, int(total_price_impact / 5)))
-        
-        results.append({
-            'Country': country,
-            'Baseline_Food_Inflation': baseline_inflation,
-            'Import_Loss_Percent': import_loss_pct * 100,
-            'Food_Price_Impact': total_price_impact,
-            'Shocked_Food_Inflation': shocked_inflation,
-            'Estimated_Recovery_Years': recovery_years,
-            'Food_Security_Index': country_info['Food_Security_Index']
-        })
-    
-    return pd.DataFrame(results)
+    return dict(country=country_col, partner=partner_col, product=product_col,
+                value=value_col, year=year_col, hs_code=hs_col)
 
-def create_food_security_visualizations(fsi_df: pd.DataFrame, shock_results: pd.DataFrame = None):
-    st.subheader("Food Security Index Rankings")
-    
-    if not fsi_df.empty:
-        top_10 = fsi_df.head(10)
-        
-        chart1 = alt.Chart(top_10).mark_bar().encode(
-            x=alt.X('Food_Security_Index:Q', title='Food Security Index'),
-            y=alt.Y('Country:N', sort='-x', title='Country'),
-            color=alt.Color('Risk_Category:N',
-                          scale=alt.Scale(domain=['Low', 'Medium', 'High'],
-                                        range=['green', 'orange', 'red']),
-                          title='Risk Level'),
-            tooltip=['Country:N', 'Food_Security_Index:Q', 
-                    'Top_Partner_Share:Q', 'Import_Intensity_GDP:Q']
-        ).properties(
-            width=600,
-            height=400,
-            title="Top 10 Countries by Food Security Risk"
-        )
-        
-        st.altair_chart(chart1, use_container_width=True)
-        
-        st.subheader("Import Intensity vs Partner Concentration")
-        
-        scatter = alt.Chart(fsi_df).mark_circle(size=100).encode(
-            x=alt.X('Import_Intensity_GDP:Q', title='Import Intensity (% of GDP)'),
-            y=alt.Y('Partner_Concentration_HHI:Q', title='Partner Concentration (HHI)'),
-            color=alt.Color('Food_Security_Index:Q',
-                          scale=alt.Scale(scheme='viridis'),
-                          title='FSI Score'),
-            size=alt.Size('Top_Partner_Share:Q',
-                         scale=alt.Scale(range=[50, 400]),
-                         title='Top Partner Share'),
-            tooltip=['Country:N', 'Food_Security_Index:Q', 
-                    'Top_Partner_Share:Q', 'Import_Intensity_GDP:Q']
-        ).properties(
-            width=600,
-            height=400,
-            title="Food Security Risk Matrix"
-        )
-        
-        st.altair_chart(scatter, use_container_width=True)
-    
-    if shock_results is not None and not shock_results.empty:
-        st.subheader("Food Security Shock Simulation")
-        
-        shock_chart = alt.Chart(shock_results).mark_bar().encode(
-            x=alt.X('Country:N', title='Country'),
-            y=alt.Y('Food_Price_Impact:Q', title='Food Price Impact (% increase)'),
-            color=alt.Color('Food_Price_Impact:Q',
-                          scale=alt.Scale(scheme='reds'),
-                          title='Impact Severity'),
-            tooltip=['Country:N', 'Food_Price_Impact:Q',
-                    'Shocked_Food_Inflation:Q', 'Import_Loss_Percent:Q']
-        ).properties(
-            width=600,
-            height=300,
-            title="Estimated Food Price Impact from 50% Agricultural Import Ban"
-        )
-        
-        st.altair_chart(shock_chart, use_container_width=True)
+def tag_agriculture(df: pd.DataFrame, product_col: Optional[str], hs_col: Optional[str]) -> pd.Series:
+    mask = pd.Series([False] * len(df), index=df.index)
 
-def main():
-    st.title("Food Security Risk Analysis")
-    st.caption("Identifying countries vulnerable to agricultural import disruptions")
- 
-    with st.spinner("Loading agricultural data..."):
-        df = load_agri_data()
-  
+    if hs_col is not None and hs_col in df.columns:
+        def chapter(v):
+            try:
+                s = str(v).strip()
+                if len(s) >= 2 and s[:2].isdigit():
+                    return int(s[:2])
+                return int(float(s))
+            except Exception:
+                return None
+        chapters = df[hs_col].map(chapter)
+        mask_hs = chapters.apply(lambda x: (x is not None) and (1 <= x <= 24))
+        mask = mask | mask_hs
+
+    if product_col is not None and product_col in df.columns:
+        keywords = [
+            "agri", "agriculture", "farm", "food", "cereal", "grain", "wheat", "rice", "maize",
+            "corn", "barley", "oat", "millet", "sorghum", "soy", "soybean", "oilseed",
+            "palm", "sunflower", "rapeseed", "canola", "vegetable", "fruit", "banana",
+            "apple", "citrus", "meat", "beef", "poultry", "chicken", "pork",
+            "fish", "seafood", "dairy", "milk", "cheese", "butter", "egg",
+            "sugar", "coffee", "cocoa", "tea", "spice", "pulse", "lentil", "pea",
+            "bean", "chickpea", "cassava", "yam", "potato", "flour", "edible oil", "edible oils"
+        ]
+        prod_l = df[product_col].astype(str).str.lower()
+        mask_kw = prod_l.apply(lambda s: any(k in s for k in keywords))
+        mask = mask | mask_kw
+
+    return mask
+
+def compute_dependency(df: pd.DataFrame,
+                       country_col: str,
+                       partner_col: str,
+                       value_col: str,
+                       top_n_for_flag: int = 3,
+                       threshold_share: float = 0.7) -> Tuple[pd.DataFrame, pd.DataFrame]:
+    g = df.groupby([country_col, partner_col], dropna=False, as_index=False)[value_col].sum()
+    tot = g.groupby(country_col, as_index=False)[value_col].sum().rename(columns={value_col: "total_agri_imports"})
+    g = g.merge(tot, on=country_col, how="left")
+    g["share"] = g[value_col] / g["total_agri_imports"].replace(0, np.nan)
+    g["rank"] = g.groupby(country_col)["share"].rank(method="first", ascending=False).astype(int)
+    g = g.sort_values([country_col, "share"], ascending=[True, False]).reset_index(drop=True)
+
+    top_shares = g[g["rank"] <= 3].pivot(index=country_col, columns="rank", values="share").fillna(0.0)
+    top_shares.columns = [f"top{int(c)}_share" for c in top_shares.columns]
+    
+    hhi = g.copy()
+    hhi["share2"] = (hhi["share"].fillna(0.0) * 100) ** 2
+    hhi = hhi.groupby(country_col, as_index=False)["share2"].sum().rename(columns={"share2": "hhi"})
+    
+    partner_count = g.groupby(country_col, as_index=False).size().rename(columns={"size": "partner_count"})
+    
+    cover = g[g["rank"] <= top_n_for_flag].groupby(country_col, as_index=False)["share"].sum().rename(columns={"share": "top_n_cover_share"})
+
+    summary = tot.merge(top_shares, on=country_col, how="left").merge(hhi, on=country_col, how="left").merge(cover, on=country_col, how="left").merge(partner_count, on=country_col, how="left")
+    for c in ["top1_share", "top2_share", "top3_share", "top_n_cover_share"]:
+        if c not in summary.columns:
+            summary[c] = 0.0
+    
+    summary["diversification_index"] = 1 - (summary["hhi"] / 10000)
+    summary["concentrated_flag"] = summary["top_n_cover_share"].fillna(0.0) >= threshold_share
+    summary["critical_dependency"] = (summary["top1_share"] >= 0.5) | (summary["top2_share"] >= 0.3)
+
+    partner_shares = g[[country_col, partner_col, value_col, "share", "rank"]].copy()
+
+    return partner_shares, summary
+
+def simulate_export_ban(partner_shares: pd.DataFrame,
+                        country_col: str,
+                        partner_col: str,
+                        value_col: str,
+                        k_banned: int = 2) -> pd.DataFrame:
+    ps = partner_shares.copy()
+    ps = ps.sort_values([country_col, "share"], ascending=[True, False])
+    
+    topk = ps.groupby(country_col).head(k_banned)
+    lost = topk.groupby(country_col, as_index=False)["share"].sum().rename(columns={"share": "lost_import_share"})
+    
+    hhi = ps.copy()
+    hhi["share2"] = (hhi["share"].fillna(0.0) * 100) ** 2
+    hhi = hhi.groupby(country_col, as_index=False)["share2"].sum().rename(columns={"share2": "hhi"})
+    
+    partner_count = ps.groupby(country_col).size().reset_index(name='total_partners')
+    
+    sim = lost.merge(hhi, on=country_col, how="left").merge(partner_count, on=country_col, how="left")
+    sim["remaining_import_share"] = 1.0 - sim["lost_import_share"].fillna(0.0)
+    
+    sim["market_concentration"] = np.minimum(1.0, sim["hhi"].fillna(1000.0) / 5000.0)
+    sim["supply_disruption_factor"] = 1 + sim["lost_import_share"].fillna(0.0) * 2
+    sim["partner_scarcity"] = np.maximum(0.5, 1 - (sim["total_partners"] - k_banned) / 10)
+    
+    sim["vulnerability_score"] = (
+        sim["lost_import_share"].fillna(0.0) * 40 +
+        sim["market_concentration"] * 30 +
+        sim["partner_scarcity"] * 30
+    )
+    sim["vulnerability_score"] = sim["vulnerability_score"].clip(0, 100)
+    
+    base_recovery = np.random.normal(18, 3, len(sim))
+    dependency_factor = 1 + sim["lost_import_share"].fillna(0.0) * 1.5
+    concentration_penalty = 1 + sim["market_concentration"] * 0.8
+    diversification_bonus = np.maximum(0.5, 1 - (sim["total_partners"] - 5) / 20)
+    
+    sim["recovery_months"] = (
+        base_recovery * 
+        dependency_factor * 
+        concentration_penalty * 
+        diversification_bonus
+    )
+    sim["recovery_months"] = sim["recovery_months"].clip(6, 48).round(1)
+    
+    sim["food_security_risk"] = pd.cut(
+        sim["vulnerability_score"], 
+        bins=[0, 25, 50, 75, 100], 
+        labels=["Low", "Moderate", "High", "Critical"]
+    )
+    
+    return sim.sort_values("vulnerability_score", ascending=False)
+
+def run_milestone4_analysis(df):
+    st.title("Agricultural Import Dependency & Export Ban Risk")
+    st.write("Identify countries most dependent on 2-3 partners for agricultural imports and model food security risk if those partners impose export bans.")
+    
     if df.empty:
-        st.error("Failed to load data. Please ensure the dataset is available and try again.")
-        st.stop()
+        st.error("No data available. Please load a dataset first.")
+        return
     
-    st.sidebar.success(f"Loaded {len(df)} records for {df['Country'].nunique()} countries")
-
-    column_mapping = resolve_agri_columns(df)
-
-    st.sidebar.subheader("Analysis Parameters")
-    latest_data_only = st.sidebar.checkbox("Use latest year data only", value=True)
-    shock_magnitude = st.sidebar.slider(
-        "Import ban magnitude (%)",
-        min_value=10, max_value=80, value=50, step=5
-    ) / 100
+    detected = detect_columns(df)
     
-    st.header("Food Security Index (FSI) Analysis")
+    if detected.get("country") is None or detected.get("partner") is None or detected.get("value") is None:
+        st.error("Could not automatically detect required columns (country, partner, value). Please check your dataset structure.")
+        return
     
-    with st.spinner("Computing Food Security Index..."):
-        fsi_results = compute_food_security_index(df, column_mapping, latest_data_only)
-    
-    if fsi_results.empty:
-        st.error("Could not compute Food Security Index. Please check your data.")
-        st.stop()
-    
-    col1, col2, col3, col4 = st.columns(4)
+    st.subheader("Analysis Parameters")
+    col1, col2 = st.columns(2)
     
     with col1:
-        st.metric("Countries Analyzed", len(fsi_results))
+        threshold_share = st.slider("Top-N coverage threshold", 0.5, 0.95, 0.7, 0.05, 
+                                   help="Countries where top N partners cover at least this share are flagged as concentrated.")
+        top_n_for_flag = st.selectbox("N partners for concentration test", [2, 3], index=1)
     
     with col2:
-        high_risk = len(fsi_results[fsi_results['Risk_Category'] == 'High'])
-        st.metric("High Risk Countries", high_risk, delta=f"{high_risk/len(fsi_results)*100:.1f}%")
+        k_banned = st.selectbox("Ban scenario (top-k partners banned)", [2, 3], index=0)
     
-    with col3:
-        avg_fsi = fsi_results['Food_Security_Index'].mean()
-        st.metric("Average FSI Score", f"{avg_fsi:.1f}")
+    country_col = detected["country"]
+    partner_col = detected["partner"]  
+    value_col = detected["value"]
+    product_col = detected.get("product")
+    hs_col = detected.get("hs_code")
     
-    with col4:
-        max_import_intensity = fsi_results['Import_Intensity_GDP'].max()
-        st.metric("Max Import Intensity", f"{max_import_intensity:.1f}% of GDP")
+    st.write(f"**Detected columns:** Country: {country_col}, Partner: {partner_col}, Value: {value_col}")
+    if product_col:
+        st.write(f"Product: {product_col}")
+    if hs_col:
+        st.write(f"HS Code: {hs_col}")
     
-    st.subheader("Top 3 Most Vulnerable Countries")
+    keep = [c for c in [country_col, partner_col, value_col, product_col, hs_col] if c is not None]
+    slim = df[keep].copy()
     
-    top_3 = fsi_results.head(3)
+    mask = tag_agriculture(slim, product_col, hs_col)
+    agri = slim[mask].copy()
     
-    for idx, (_, country_data) in enumerate(top_3.iterrows(), 1):
-        with st.container(border=True):
-            st.markdown(f"### #{idx} {country_data['Country']}")
-            
-            c1, c2, c3 = st.columns(3)
-            with c1:
-                st.metric("FSI Score", f"{country_data['Food_Security_Index']:.1f}")
-                st.metric("Risk Level", country_data['Risk_Category'])
-            
-            with c2:
-                st.metric("Import Intensity", f"{country_data['Import_Intensity_GDP']:.1f}% GDP")
-            
-            with c3:
-                st.metric("Partner Share", f"{country_data['Top_Partner_Share']*100:.1f}%")
-                st.metric("Concentration (HHI)", f"{country_data['Partner_Concentration_HHI']:.3f}")
+    if agri.empty:
+        st.error("No agricultural records detected. Try adjusting the dataset or ensure it contains agricultural trade data.")
+        return
     
-    st.subheader("Complete Rankings")
+    agri[value_col] = pd.to_numeric(agri[value_col], errors="coerce").fillna(0.0)
+    agri = agri[agri[value_col] > 0]
     
-    display_cols = ['Country', 'Food_Security_Index', 'Risk_Category',
-                   'Import_Intensity_GDP', 'Top_Partner_Share']
+    st.write(f"Found {len(agri):,} agricultural trade records from {agri[country_col].nunique()} countries")
     
-    formatted_results = fsi_results[display_cols].copy()
-    formatted_results['Top_Partner_Share'] = formatted_results['Top_Partner_Share'].apply(lambda x: f"{x*100:.1f}%")
-    formatted_results['Import_Intensity_GDP'] = formatted_results['Import_Intensity_GDP'].apply(lambda x: f"{x:.1f}%")
-    formatted_results['Food_Security_Index'] = formatted_results['Food_Security_Index'].apply(lambda x: f"{x:.1f}")
-    
-    st.dataframe(
-        formatted_results,
-        column_config={
-            "Country": "Country",
-            "Food_Security_Index": "FSI Score",
-            "Risk_Category": "Risk Level",
-            "Import_Intensity_GDP": "Imports/GDP",
-            "Top_Partner_Share": "Top Partner Share"
-        },
-        use_container_width=True
+    partner_shares, summary = compute_dependency(
+        agri, country_col, partner_col, value_col,
+        top_n_for_flag=top_n_for_flag, threshold_share=threshold_share
     )
     
-    st.header("Food Security Shock Simulation")
-    st.markdown("Simulate the impact of major agricultural import bans")
+    st.subheader("Import Dependency Analysis")
+    st.write(f"Countries where top **{top_n_for_flag}** partners cover ≥ **{int(threshold_share*100)}%** of agricultural imports:")
     
-    available_countries = fsi_results['Country'].tolist()
-    default_selection = top_3['Country'].tolist()
+    conc = summary.sort_values("top_n_cover_share", ascending=False)
     
-    selected_countries = st.multiselect(
-        "Select countries to simulate import ban:",
-        available_countries,
-        default=default_selection,
-        help="Countries to include in the food security shock simulation"
-    )
+    display_summary = conc.copy()
+    display_summary["diversification_index"] = display_summary["diversification_index"].round(3)
+    display_summary["hhi"] = display_summary["hhi"].round(0)
+    for col in ["top1_share", "top2_share", "top3_share", "top_n_cover_share"]:
+        if col in display_summary.columns:
+            display_summary[col] = display_summary[col].round(3)
     
-    if selected_countries:
-        with st.spinner("Running food security shock simulation..."):
-            shock_results = simulate_food_security_shock(
-                df, fsi_results, column_mapping, selected_countries, shock_magnitude
-            )
+    st.dataframe(display_summary)
+    
+    st.write(f"**Key Insights:**")
+    critical_countries = len(conc[conc["critical_dependency"]])
+    concentrated_countries = len(conc[conc["concentrated_flag"]])
+    avg_diversification = conc["diversification_index"].mean()
+    st.write(f"- {critical_countries} countries have critical dependency (>50% from top partner or >30% from top 2)")
+    st.write(f"- {concentrated_countries} countries are flagged as concentrated based on top-{top_n_for_flag} threshold")
+    st.write(f"- Average market diversification index: {avg_diversification:.2f} (1.0 = perfectly diversified)")
+    
+    st.subheader("Most Dependent Countries (Top 15)")
+    top_dep = conc[conc["concentrated_flag"]].head(15)
+    if len(top_dep) == 0 and len(conc) > 0:
+        top_dep = conc.head(15)
+    
+    if not top_dep.empty:
+        chart_data = top_dep.set_index(country_col)[["top1_share", "top2_share", "top3_share"]]
+        st.bar_chart(chart_data)
         
-        if not shock_results.empty:
-            st.subheader(f"Impact of {shock_magnitude*100:.0f}% Agricultural Import Ban")
+        col1, col2 = st.columns(2)
+        with col1:
+            st.metric("Most Dependent Country", 
+                     top_dep.iloc[0][country_col], 
+                     f"{top_dep.iloc[0]['top_n_cover_share']:.1%} from top {top_n_for_flag}")
+        with col2:
+            st.metric("Highest HHI", 
+                     conc.loc[conc["hhi"].idxmax(), country_col],
+                     f"{conc['hhi'].max():.0f}")
+    
+    st.subheader(f"Food Security Risk Assessment: Top-{k_banned} Partner Export Ban")
+    sim = simulate_export_ban(partner_shares, country_col, partner_col, value_col, k_banned=k_banned)
+    
+    if not sim.empty:
+        st.write("**Vulnerability Analysis Results:**")
+        
+        display_sim = sim.copy()
+        for col in ["lost_import_share", "remaining_import_share", "market_concentration", "vulnerability_score"]:
+            if col in display_sim.columns:
+                display_sim[col] = display_sim[col].round(3)
+        
+        st.dataframe(display_sim)
+        
+        col1, col2, col3 = st.columns(3)
+        
+        with col1:
+            st.write("**Vulnerability Scores:**")
+            vuln_chart = sim.set_index(country_col)["vulnerability_score"].head(12)
+            st.bar_chart(vuln_chart)
             
-            avg_impact = shock_results['Food_Price_Impact'].mean()
-            worst_impact = shock_results['Food_Price_Impact'].max()
-            worst_country = shock_results.loc[shock_results['Food_Price_Impact'].idxmax(), 'Country']
+        with col2:
+            st.write("**Recovery Time (Months):**")
+            recovery_chart = sim.set_index(country_col)["recovery_months"].head(12)
+            st.bar_chart(recovery_chart)
             
-            col1, col2, col3 = st.columns(3)
-            with col1:
-                st.metric("Average Price Impact", f"{avg_impact:.2f}%")
-            with col2:
-                st.metric("Worst Price Impact", f"{worst_impact:.2f}%")
-            with col3:
-                st.metric("Most Affected", worst_country)
-            
-            for _, result in shock_results.iterrows():
-                with st.container(border=True):
-                    st.markdown(f"### {result['Country']}")
-                    
-                    c1, c2, c3, c4 = st.columns(4)
-                    with c1:
-                        st.metric(
-                            "Food Inflation",
-                            f"{result['Shocked_Food_Inflation']:.2f}%",
-                            f"{result['Food_Price_Impact']:.2f}%"
-                        )
-                    with c2:
-                        st.metric("Import Loss", f"{result['Import_Loss_Percent']:.1f}%")
-                    with c3:
-                        st.metric("Recovery Time", f"{result['Estimated_Recovery_Years']:.0f} years")
-                    with c4:
-                        st.metric("FSI Score", f"{result['Food_Security_Index']:.1f}")
+        with col3:
+            st.write("**Risk Distribution:**")
+            risk_dist = sim["food_security_risk"].value_counts()
+            st.bar_chart(risk_dist)
+        
+        high_risk = len(sim[sim["vulnerability_score"] > 70])
+        avg_recovery = sim["recovery_months"].mean()
+        worst_case = sim.iloc[0]
+        
+        st.write("**Risk Assessment Summary:**")
+        st.write(f"- **{high_risk}** countries face high vulnerability (score >70)")
+        st.write(f"- **Average recovery time:** {avg_recovery:.1f} months across all countries")
+        st.write(f"- **Highest risk country:** {worst_case[country_col]} (score: {worst_case['vulnerability_score']:.1f}, recovery: {worst_case['recovery_months']:.1f} months)")
+        
+        critical_risk_countries = sim[sim["food_security_risk"] == "Critical"]
+        if len(critical_risk_countries) > 0:
+            st.error(f"🚨 **{len(critical_risk_countries)} countries** face CRITICAL food security risk from export bans")
+            st.write("Critical risk countries:", ", ".join(critical_risk_countries[country_col].head(10).tolist()))
+    else:
+        st.error("No vulnerability analysis results generated")
     
-    create_food_security_visualizations(fsi_results, shock_results if 'shock_results' in locals() else None)
+    st.subheader("Country Details")
+    countries = list(partner_shares[country_col].dropna().unique())
+    if len(countries) > 0:
+        sel_cty = st.selectbox("Select a country for detailed analysis", options=sorted(countries))
+        ps = partner_shares[partner_shares[country_col] == sel_cty].sort_values("share", ascending=False).copy()
+        ps["share_pct"] = (ps["share"] * 100).round(2)
+        st.write(f"**Partner shares for {sel_cty}:**")
+        display_cols = [partner_col, value_col, "share_pct", "rank"]
+        st.dataframe(ps[display_cols])
+        
+        if not ps.empty:
+            partner_chart = ps.set_index(partner_col)["share"].head(10)
+            st.bar_chart(partner_chart)
     
-    with st.expander("Methodology & Assumptions", expanded=False):
-        st.markdown("""
-        ### Food Security Index (FSI) Calculation
-        
-        **Components (weighted):**
-        - **Import Intensity (35%)**: Imports as % of GDP (proxy for agricultural imports)
-        - **Partner Concentration (35%)**: Estimated Herfindahl-Hirschman Index based on import intensity
-        - **Agricultural Production (20%)**: Domestic agricultural production levels
-        - **Food Inflation (10%)**: Consumer price inflation (proxy for food inflation)
-        
-        **Risk Categories:**
-        - **High Risk**: FSI > 35 (Heavy import dependence with high concentration)
-        - **Medium Risk**: FSI 25-35 (Moderate import dependence)
-        - **Low Risk**: FSI < 25 (Diversified import sources)
-        
-        ### Food Security Shock Simulation Assumptions
-        
-        1. **Direct Impact**: Import loss = Estimated top partner share × Shock magnitude × Import intensity
-        2. **Multiplier Effects**: Import-dependent economies have higher multipliers (1.2x to 2.0x)
-        3. **Recovery**: Estimated based on impact severity (1-5 years)
-        4. **Baseline Inflation**: Uses historical data or assumes 2.0% baseline
-        
-        ### Data Sources & Limitations
-        
-        - Dataset lacks specific agricultural import partner data; uses import intensity to estimate concentration
-        - Assumes 2-3 dominant partners based on import intensity thresholds
-        - Real implementation requires detailed bilateral agricultural trade data
-        - Multiplier effects are simplified estimates based on economic literature
-        """)
+    with st.expander("Download Results"):
+        st.download_button("Download Partner Shares CSV", 
+                          data=partner_shares.to_csv(index=False), 
+                          file_name="agricultural_partner_shares.csv")
+        st.download_button("Download Country Dependency Summary CSV", 
+                          data=summary.to_csv(index=False), 
+                          file_name="agricultural_dependency_summary.csv")
+        st.download_button("Download Vulnerability Assessment CSV", 
+                          data=sim.to_csv(index=False), 
+                          file_name="food_security_vulnerability_assessment.csv")
 
-if __name__ == "__main__":
-    main()
+def main(df):
+    run_milestone4_analysis(df)
