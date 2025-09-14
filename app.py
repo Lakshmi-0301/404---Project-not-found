@@ -5,7 +5,7 @@ from src import policy_scenarios
 from src import milestone1
 from src import milestone2
 from src import milestone3
-from src import milestone4other
+from src import milestone4
 from src import milestone5
 from src import milestone6
 from src import milestone7
@@ -318,7 +318,7 @@ def main():
     elif page == "Drought Shock Simulation":
         milestone3.main()
     elif page == "Food Security Analysis":
-        milestone4other.main()
+        milestone4.main()
     elif page == "Youth Unemployment Projection":
         milestone5.main()
     elif page == "Export Sector Ageing Risk":
